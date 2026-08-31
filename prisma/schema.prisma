@@ -1,0 +1,273 @@
+// Prisma schema for Quizkit.
+// Auth tables (user/session/account/verification) are appended below by
+// `npm run auth:generate` (better-auth generate) — do not hand-edit that block.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------- Auth (better-auth core schema + the `role` additionalField
+// declared in lib/auth.ts) ----------
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  role          String   @default("user")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions Session[]
+  accounts Account[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  issuer                String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@map("verification")
+}
+
+// ---------- Domain ----------
+// All list-shaped fields use Json instead of scalar lists (String[]) so the
+// schema works unchanged on SQLite (dev) and Postgres (prod) — SQLite has no
+// native scalar-list support. See docs/multi-domain-playbook.md.
+
+model Profile {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  role                String    @default("user") // "user" | "admin" | "superadmin"
+  // No @default on Json fields: Prisma emits `DEFAULT {}`, invalid SQLite
+  // DDL, so every .create() must pass these explicitly — see lib/session.ts.
+  metadata            Json // vertical-specific fields (e.g. matricule/agency)
+  avatar              String?
+  themeColor          String?
+  isOnline            Boolean   @default(false)
+  lastSeenAt          DateTime?
+  currentStreak       Int       @default(0)
+  bestStreak          Int       @default(0)
+  medalsBronze        Int       @default(0)
+  medalsSilver        Int       @default(0)
+  medalsGold          Int       @default(0)
+  totalQuizzes        Int       @default(0)
+  totalPoints         Int       @default(0)
+  answeredQuestionIds Json // string[]
+  favoriteCategoryIds Json // string[]
+  hasRated            Boolean   @default(false)
+  notifyDuel          Boolean   @default(true)
+  notifyQuiz          Boolean   @default(true)
+  notifyApp           Boolean   @default(true)
+  suspendedUntil      DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  attempts  Attempt[]
+  quizzes   Quiz[]
+  resources Resource[]
+  threads   ForumThread[]
+  posts     ForumPost[]
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  color       String?
+  icon        String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  questions Question[]
+}
+
+model Question {
+  id            String   @id @default(cuid())
+  categoryId    String
+  category      Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  subCategory   String?
+  text          String
+  optionA       String
+  optionB       String
+  optionC       String
+  optionD       String
+  correctOption String // "a" | "b" | "c" | "d"
+  explanation   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([categoryId])
+}
+
+model Quiz {
+  id             String   @id @default(cuid())
+  title          String
+  description    String?
+  customCategory String?
+  isPublic       Boolean  @default(false)
+  questionIds    Json // ordered string[]
+  createdById    String
+  createdBy      Profile  @relation(fields: [createdById], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  attempts Attempt[]
+}
+
+model Attempt {
+  id         String   @id @default(cuid())
+  profileId  String
+  profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  quizType   String // "bank" | "custom"
+  quizId     String?
+  quiz       Quiz?    @relation(fields: [quizId], references: [id])
+  category   String?
+  score      Int
+  total      Int
+  percentage Int
+  answers    Json // { questionId, selected, correct, isCorrect }[]
+  createdAt  DateTime @default(now())
+
+  @@index([profileId])
+  @@index([quizId])
+}
+
+model Duel {
+  id                String    @id @default(cuid())
+  challengerId      String
+  challengerName    String
+  opponentId        String
+  opponentName      String
+  status            String    @default("pending") // pending|lobby|countdown|active|challenger_done|finished
+  quizTitle         String?
+  questionIds       Json
+  challengerScore   Int       @default(0)
+  opponentScore     Int       @default(0)
+  // No @default here either, same reason as Profile above.
+  challengerAnswers Json
+  opponentAnswers   Json
+  challengerReady   Boolean   @default(false)
+  opponentReady     Boolean   @default(false)
+  countdownStartAt  DateTime?
+  winnerId          String?
+  timerSeconds      Int       @default(20)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([challengerId])
+  @@index([opponentId])
+}
+
+model Resource {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  category    String?
+  subCategory String?
+  fileUrl     String
+  fileName    String?
+  fileType    String // "pdf" | "word" | "image"
+  createdById String
+  createdBy   Profile  @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([category])
+}
+
+model ForumThread {
+  id        String   @id @default(cuid())
+  title     String
+  category  String
+  body      String
+  isPinned  Boolean  @default(false)
+  authorId  String
+  author    Profile  @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+
+  posts ForumPost[]
+}
+
+model ForumPost {
+  id        String      @id @default(cuid())
+  threadId  String
+  thread    ForumThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  body      String
+  isTip     Boolean     @default(false)
+  authorId  String
+  author    Profile     @relation(fields: [authorId], references: [id])
+  createdAt DateTime    @default(now())
+
+  @@index([threadId])
+}
+
+model Message {
+  id           String   @id @default(cuid())
+  targetUserId String
+  title        String
+  body         String
+  isRead       Boolean  @default(false)
+  senderName   String?
+  createdAt    DateTime @default(now())
+
+  @@index([targetUserId])
+}
+
+model Notification {
+  id           String   @id @default(cuid())
+  targetUserId String
+  type         String // "duel" | "quiz" | "app"
+  title        String
+  message      String
+  isRead       Boolean  @default(false)
+  actionUrl    String?
+  icon         String?
+  createdAt    DateTime @default(now())
+
+  @@index([targetUserId])
+}
